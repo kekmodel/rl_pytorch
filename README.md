@@ -6,9 +6,11 @@
 - Categorical DQN (C51)
 	+ debugging	 	
 <br>
+
 ### Exploration
 - Random Network Distillation (RND)
 <br>
+
 ### Experiments
 The result of passing the environment-defined "solving" criteria.
 - **Dueling Double DQN**
