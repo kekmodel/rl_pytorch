@@ -4,7 +4,7 @@
 - DQN
 - Dueling Double DQN
 - Categorical DQN (C51)
-	+ debugging	 	
+- Categotical Dueling Double DQN
 <br>
 
 ### Exploration
