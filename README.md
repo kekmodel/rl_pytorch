@@ -5,6 +5,7 @@
 - Dueling Double DQN
 - Categorical DQN (C51)
 - Categotical Dueling Double DQN
+- Proximal Policy Optimization (PPO)
 <br>
 
 ### Exploration
@@ -37,7 +38,6 @@ The result of passing the environment-defined "solving" criteria.
 <br>
 
 ### TODO
-- Proximal Policy Optimization (PPO)
 - Soft Actor-Critic (SAC)
 - Quantile Regression DQN (QR DQN)
 - Implicit Quantile Networks (IQN)
