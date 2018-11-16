@@ -6,6 +6,8 @@
 - Categorical DQN (C51)
 - Categotical Dueling Double DQN
 - Proximal Policy Optimization (PPO)
+	+ debugging
+- Soft Actor-Critic (SAC)
 <br>
 
 ### Exploration
@@ -38,7 +40,6 @@ The result of passing the environment-defined "solving" criteria.
 <br>
 
 ### TODO
-- Soft Actor-Critic (SAC)
 - Quantile Regression DQN (QR DQN)
 - Implicit Quantile Networks (IQN)
 - Intrinsic Curiosity Module (ICM)
