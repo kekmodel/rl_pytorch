@@ -47,8 +47,11 @@ The result of passing the environment-defined "solving" criteria.
 - Intrinsic Curiosity Module (ICM)
 - Rainbow
 - Parametric DQN
+- Proximal Policy Optimization (PPO)
+	+ continuous
 - Deep Deterministic Policy Gradient (DDPG)
 - MCTS Net
 - Parallel Models 
 	+ Ape-X
 	+ R2D2
+	+ PAAC
