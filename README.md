@@ -6,7 +6,7 @@
 - Categorical DQN (C51)
 - Categotical Dueling Double DQN
 - Proximal Policy Optimization (PPO)
-	+ debugging
+	+ discrete (episodic, n-step)
 - Soft Actor-Critic (SAC)
 	+ debugging
 <br>
