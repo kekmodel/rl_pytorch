@@ -8,10 +8,12 @@
 - Proximal Policy Optimization (PPO)
 	+ debugging
 - Soft Actor-Critic (SAC)
+	+ debugging
 <br>
 
 ### Exploration
 - Random Network Distillation (RND)
+	+ debugging
 <br>
 
 ### Experiments
