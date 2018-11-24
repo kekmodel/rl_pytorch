@@ -13,7 +13,6 @@
 
 ### Exploration
 - Random Network Distillation (RND)
-	+ debugging
 <br>
 
 ### Experiments
