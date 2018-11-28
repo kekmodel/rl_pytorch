@@ -4,7 +4,6 @@ from collections import deque
 from copy import deepcopy
 
 import gym
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,7 +13,7 @@ from torch.distributions import Categorical
 from torch.utils.data import DataLoader
 
 N_PROCESS = 8
-ROLL_LEN = 1024
+ROLL_LEN = 2048
 BATCH_SIZE = 32 * N_PROCESS
 LR = 0.00025
 EPOCHS = 10
