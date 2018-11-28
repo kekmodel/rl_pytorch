@@ -14,7 +14,7 @@ from torch.distributions import Categorical
 from torch.utils.data import DataLoader
 
 N_PROCESS = 8
-ROLL_LEN = 2048
+ROLL_LEN = 1024
 BATCH_SIZE = 32 * N_PROCESS
 LR = 0.00025
 EPOCHS = 10
@@ -169,22 +169,6 @@ def compute_adv_with_gae(rewards, values, roll_memory):
     values.clear()
 
     return roll_memory
-
-
-def plot():
-    clear_output(True)
-    plt.figure(figsize=(16, 5))
-    plt.subplot(121)
-    plt.plot(ep_rewards, alpha=0.5)
-    plt.subplot(121)
-    plt.plot(reward_eval)
-    plt.title(f'Reward: '
-              f'{reward_eval[-1]}')
-    plt.subplot(122)
-    plt.plot(losses, alpha=0.5)
-    plt.title(f'Loss: '
-              f'{np.mean(list(reversed(losses))[: n_eval]).round(decimals=2)}')
-    plt.show()
 
 
 def roll_out(env, length, seed, child):
