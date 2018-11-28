@@ -2,7 +2,6 @@
 # coding: utf-8
 from collections import deque
 from copy import deepcopy
-import time
 
 import gym
 import matplotlib.pyplot as plt
@@ -13,7 +12,6 @@ import torch.optim as optim
 import torch.multiprocessing as mp
 from torch.distributions import Categorical
 from torch.utils.data import DataLoader
-from IPython.display import clear_output
 
 N_PROCESS = 8
 ROLL_LEN = 2048
@@ -277,8 +275,9 @@ if __name__ == '__main__':
 
     for i in range(N_PROCESS):
         parent, child = mp.Pipe()
-        p = mp.Process(target=roll_out, args=(
-            env, ROLL_LEN, i, child), daemon=True)
+        p = mp.Process(target=roll_out,
+                       args=(env, ROLL_LEN, i, child),
+                       daemon=True)
         jobs.append(p)
         pipes.append(parent)
 
