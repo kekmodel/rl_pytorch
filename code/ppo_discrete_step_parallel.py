@@ -13,8 +13,8 @@ from torch.distributions import Categorical
 from torch.utils.data import DataLoader
 
 N_PROCESS = 8
-ROLL_LEN = 2048
-BATCH_SIZE = 32 * N_PROCESS
+ROLL_LEN = 256
+BATCH_SIZE = 32
 LR = 0.00025
 EPOCHS = 10
 CLIP = 0.2
@@ -283,7 +283,7 @@ if __name__ == '__main__':
                     env.spec.id, update))
                 torch.save(net.state_dict(),
                            f'./test/saved_models/'
-                           f'{env.spec.id}_{update}up_clear_model_ppo_st.pt')
+                           f'{env.spec.id}_up{update}_clear_model_ppo_st.pt')
                 break
 
         state_dict = learn(net, trajectory)
