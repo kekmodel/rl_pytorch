@@ -11,18 +11,21 @@ import torch.optim as optim
 import torch.multiprocessing as mp
 from torch.distributions import Categorical
 from torch.utils.data import DataLoader
+from tensorboardX import SummaryWriter
+from running_mean_std import RunningMeanStd
 
-N_PROCESS = 8
-ROLL_LEN = 256
-BATCH_SIZE = 32
-LR = 0.00025
+N_PROCESS = 4
+ROLL_LEN = 2048
+BATCH_SIZE = 64
+LR = 0.00030
 EPOCHS = 10
 CLIP = 0.2
 GAMMA = 0.999
 LAMBDA = 0.98
-ENT_COEF = 0.01
+ENT_COEF = 0.0
 V_COEF = 1.0
 V_CLIP = True
+OBS_NORM = False
 LIN_REDUCE = False
 GRAD_NORM = False
 
@@ -30,6 +33,7 @@ GRAD_NORM = False
 use_cuda = torch.cuda.is_available()
 print('cuda:', use_cuda)
 device = torch.device('cuda' if use_cuda else 'cpu')
+writer = SummaryWriter()
 
 # random seed
 torch.manual_seed(0)
@@ -72,40 +76,34 @@ class ActorCriticNet(nn.Module):
         return log_p, v
 
 
-losses = []
-
-
 def learn(net, train_memory):
     global CLIP, LR
-    global total_epochs
+    global total_update, update, epochs
     old_net = deepcopy(net)
     net.train()
     old_net.train()
+    if LIN_REDUCE:
+        LR = LR - (LR * update / total_update)
+        CLIP = CLIP - (CLIP * update / total_update)
 
-    for epoch in range(EPOCHS):
-        if LIN_REDUCE:
-            lr = LR - (LR * epoch / total_epochs)
-            clip = CLIP - (CLIP * epoch / total_epochs)
-        else:
-            lr = LR
-            clip = CLIP
+    optimizer = torch.optim.Adam(net.parameters(), lr=LR, eps=1e-5)
+
+    for _ in range(EPOCHS):
+        losses = []
+        epochs += 1
         dataloader = DataLoader(
             train_memory,
             shuffle=True,
             batch_size=BATCH_SIZE,
             pin_memory=use_cuda
         )
-        optimizer = torch.optim.Adam(net.parameters(), lr=lr, eps=1e-5)
-
         for (s, a, ret, adv) in dataloader:
             s_batch = s.to(device).float()
             a_batch = a.to(device).long()
             ret_batch = ret.to(device).float()
-            ret_batch = (ret_batch - ret_batch.mean()) / \
-                (ret_batch.std() + 1e-5)
+            ret_batch = (ret_batch - ret_batch.mean()) / ret_batch.std()
             adv_batch = adv.to(device).float()
-            adv_batch = (adv_batch - adv_batch.mean()) / \
-                (adv_batch.std() + 1e-5)
+            adv_batch = (adv_batch - adv_batch.mean()) / adv_batch.std()
             with torch.no_grad():
                 log_p_batch_old, v_batch_old = old_net(s_batch)
                 log_p_acting_old = log_p_batch_old[range(BATCH_SIZE), a_batch]
@@ -113,12 +111,12 @@ def learn(net, train_memory):
             log_p_batch, v_batch = net(s_batch)
             log_p_acting = log_p_batch[range(BATCH_SIZE), a_batch]
             p_ratio = (log_p_acting - log_p_acting_old).exp()
-            p_ratio_clip = torch.clamp(p_ratio, 1 - clip, 1 + clip)
+            p_ratio_clip = torch.clamp(p_ratio, 1 - CLIP, 1 + CLIP)
             p_loss = torch.min(p_ratio * adv_batch,
                                p_ratio_clip * adv_batch).mean()
             if V_CLIP:
                 v_clip = v_batch_old + \
-                    torch.clamp(v_batch - v_batch_old, -clip, clip)
+                    torch.clamp(v_batch - v_batch_old, -CLIP, CLIP)
                 v_loss1 = (ret_batch - v_clip).pow(2)
                 v_loss2 = (ret_batch - v_batch).pow(2)
                 v_loss = 0.5 * torch.max(v_loss1, v_loss2).mean()
@@ -137,7 +135,9 @@ def learn(net, train_memory):
             if GRAD_NORM:
                 nn.utils.clip_grad_norm_(net.parameters(), max_norm=0.5)
             optimizer.step()
+        writer.add_scalar('data/loss', np.mean(losses), epochs)
     train_memory.clear()
+
     return net.state_dict()
 
 
@@ -174,40 +174,49 @@ def roll_out(env, length, seed, child):
     env.seed(seed)
 
     # hyperparameter
-    n_episodes = 10000
+    n_episodes = 100000
     roll_len = length
 
-    # global values
+    # for play
     steps = 0
     ep_rewards = []
-    reward_eval = []
-    is_rollout = False
-    is_solved = False
 
-    # make memories
+    # memories
     train_memory = []
     roll_memory = []
+    obses = []
+    # rews_norm = []
     rewards = []
     values = []
 
-    # make nerual networks
-    # print(f'{seed} child recv init')
-    old_net = child.recv()
+    # recieve
+    old_net, norm_obs = child.recv()
 
-    # play!
+    # Play!
     for i in range(1, n_episodes + 1):
         obs = env.reset()
         done = False
         ep_reward = 0
         while not done:
-            #         env.render()
-            action, value = get_action_and_value(obs, old_net)
+            # env.render()
+            if OBS_NORM:
+                obses.append(obs)
+                norm_obs.update(np.array(obses))
+                obs_norm = np.clip(
+                    (obs - norm_obs.mean) / np.sqrt(norm_obs.var + 1e-8),
+                    -5, 5)
+                action, value = get_action_and_value(obs_norm, old_net)
+            else:
+                action, value = get_action_and_value(obs, old_net)
+
             _obs, reward, done, _ = env.step(action)
 
-            # store
-            roll_memory.append([obs, action])
             rewards.append(reward)
             values.append(value)
+            if OBS_NORM:
+                roll_memory.append([obs_norm, action])
+            else:
+                roll_memory.append([obs, action])
 
             obs = _obs
             steps += 1
@@ -217,7 +226,14 @@ def roll_out(env, length, seed, child):
                 if done:
                     _value = 0.
                 else:
-                    _, _value = get_action_and_value(_obs, old_net)
+                    if OBS_NORM:
+                        _obs_norm = np.clip(
+                            (_obs - norm_obs.mean) /
+                            np.sqrt(norm_obs.var + 1e-8),
+                            -5, 5)
+                        _, _value = get_action_and_value(_obs_norm, old_net)
+                    else:
+                        _, _value = get_action_and_value(_obs, old_net)
 
                 values.append(_value)
                 train_memory.extend(compute_adv_with_gae(
@@ -228,16 +244,10 @@ def roll_out(env, length, seed, child):
                 child.send((train_memory, ep_rewards))
                 train_memory.clear()
                 ep_rewards.clear()
-                # print(f'{seed} child send')
-                while True:
-                    if child.poll(timeout=0.1):
-                        # print(f'{seed} child recv')
-                        old_net.load_state_dict(child.recv())
-                        break
+                old_net.load_state_dict(child.recv())
 
         if done:
             ep_rewards.append(ep_reward)
-#             plot()
             print('{:3} Episode in {:5} steps, reward {:.2f} [Process-{}]'
                   ''.format(i, steps, ep_reward, seed))
 
@@ -248,13 +258,18 @@ if __name__ == '__main__':
     obs_space = env.observation_space.shape[0]
     action_space = env.action_space.n
     n_eval = env.spec.trials
+    total_steps = 10e7
+    total_update = float(total_steps // ROLL_LEN // N_PROCESS)
 
     net = ActorCriticNet(obs_space, action_space).to(device)
-    trajectory = []
-    rewards = deque(maxlen=n_eval)
-    update = 0
+    norm_obs = RunningMeanStd(shape=env.observation_space.shape)
+
     jobs = []
     pipes = []
+    trajectory = []
+    rewards = deque(maxlen=n_eval)
+    epochs = 0
+    update = 0
 
     for i in range(N_PROCESS):
         parent, child = mp.Pipe()
@@ -265,19 +280,17 @@ if __name__ == '__main__':
         pipes.append(parent)
 
     for i in range(N_PROCESS):
-        pipes[i].send(net)
+        pipes[i].send((net, norm_obs))
         jobs[i].start()
-        # print(f'{i} parent send init')
 
     while True:
-        while len(trajectory) < ROLL_LEN * N_PROCESS:
-            for i in range(N_PROCESS):
-                if pipes[i].poll(timeout=0.1):
-                    traj, rew = pipes[i].recv()
-                    trajectory.extend(traj)
-                    rewards.extend(rew)
-                    # print(f'{i} parent recv')
+        for i in range(N_PROCESS):
+            traj, rew = pipes[i].recv()
+            trajectory.extend(traj)
+            rewards.extend(rew)
+
         if len(rewards) == n_eval:
+            writer.add_scalar('data/reward', np.mean(rewards), update)
             if np.mean(rewards) >= env.spec.reward_threshold:
                 print('\n{} is sloved! [{} Update]'.format(
                     env.spec.id, update))
@@ -288,10 +301,9 @@ if __name__ == '__main__':
 
         state_dict = learn(net, trajectory)
         update += 1
+        print(f'Update: {update}')
 
         for i in range(N_PROCESS):
             pipes[i].send(state_dict)
-            # print(f'{i} parent send')
 
-        print(f'Update: {update}')
     env.close()
