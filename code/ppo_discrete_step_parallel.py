@@ -1,5 +1,4 @@
 
-# coding: utf-8
 from collections import deque
 from copy import deepcopy
 
@@ -14,18 +13,18 @@ from torch.utils.data import DataLoader
 from tensorboardX import SummaryWriter
 from running_mean_std import RunningMeanStd
 
-N_PROCESS = 4
-ROLL_LEN = 2048
-BATCH_SIZE = 64
+N_PROCESS = 8
+ROLL_LEN = 1024
+BATCH_SIZE = 32
 LR = 0.00030
-EPOCHS = 10
+EPOCHS = 3
 CLIP = 0.2
-GAMMA = 0.999
+GAMMA = 0.995
 LAMBDA = 0.98
 ENT_COEF = 0.0
 V_COEF = 1.0
 V_CLIP = True
-OBS_NORM = False
+OBS_NORM = True
 LIN_REDUCE = False
 GRAD_NORM = False
 
@@ -42,9 +41,9 @@ if use_cuda:
 
 # make an environment
 # env = gym.make('CartPole-v0')
-# env = gym.make('CartPole-v1')
+env = gym.make('CartPole-v1')
 # env = gym.make('MountainCar-v0')
-env = gym.make('LunarLander-v2')
+# env = gym.make('LunarLander-v2')
 
 
 class ActorCriticNet(nn.Module):
@@ -101,7 +100,7 @@ def learn(net, train_memory):
             s_batch = s.to(device).float()
             a_batch = a.to(device).long()
             ret_batch = ret.to(device).float()
-            ret_batch = (ret_batch - ret_batch.mean()) / ret_batch.std()
+            # ret_batch = (ret_batch - ret_batch.mean()) / ret_batch.std()
             adv_batch = adv.to(device).float()
             adv_batch = (adv_batch - adv_batch.mean()) / adv_batch.std()
             with torch.no_grad():
@@ -157,7 +156,8 @@ def compute_adv_with_gae(rewards, values, roll_memory):
     val = np.array(values[:-1], 'float')
     _val = np.array(values[1:], 'float')
     delta = rew + GAMMA * _val - val
-    dis_r = np.array([GAMMA**(i) * r for i, r in enumerate(rewards)], 'float')
+    dis_r = np.array(
+        [GAMMA**(i) * r for i, r in enumerate(rewards)], 'float')
     gae_dt = np.array([(GAMMA * LAMBDA)**(i) * dt for i,
                        dt in enumerate(delta.tolist())], 'float')
     for i, data in enumerate(roll_memory):
@@ -184,13 +184,11 @@ def roll_out(env, length, seed, child):
     # memories
     train_memory = []
     roll_memory = []
-    obses = []
-    # rews_norm = []
     rewards = []
     values = []
 
     # recieve
-    old_net, norm_obs = child.recv()
+    old_net, norm_obs, norm_rew = child.recv()
 
     # Play!
     for i in range(1, n_episodes + 1):
@@ -200,18 +198,21 @@ def roll_out(env, length, seed, child):
         while not done:
             # env.render()
             if OBS_NORM:
-                obses.append(obs)
-                norm_obs.update(np.array(obses))
+                norm_obs.update(obs)
                 obs_norm = np.clip(
-                    (obs - norm_obs.mean) / np.sqrt(norm_obs.var + 1e-8),
-                    -5, 5)
+                    (obs - norm_obs.mean) / np.sqrt(norm_obs.var),
+                    -5., 5.)
                 action, value = get_action_and_value(obs_norm, old_net)
             else:
                 action, value = get_action_and_value(obs, old_net)
 
             _obs, reward, done, _ = env.step(action)
-
-            rewards.append(reward)
+            # print(type(reward))
+            norm_rew.update(np.array([reward]))
+            rew_norm = np.clip(
+                (reward - norm_rew.mean) / np.sqrt(norm_rew.var),
+                -5., 5.)
+            rewards.append(rew_norm)
             values.append(value)
             if OBS_NORM:
                 roll_memory.append([obs_norm, action])
@@ -224,13 +225,14 @@ def roll_out(env, length, seed, child):
 
             if done or steps % roll_len == 0:
                 if done:
+                    norm_obs.update(_obs)
                     _value = 0.
                 else:
                     if OBS_NORM:
                         _obs_norm = np.clip(
                             (_obs - norm_obs.mean) /
-                            np.sqrt(norm_obs.var + 1e-8),
-                            -5, 5)
+                            np.sqrt(norm_obs.var),
+                            -5., 5.)
                         _, _value = get_action_and_value(_obs_norm, old_net)
                     else:
                         _, _value = get_action_and_value(_obs, old_net)
@@ -250,6 +252,7 @@ def roll_out(env, length, seed, child):
             ep_rewards.append(ep_reward)
             print('{:3} Episode in {:5} steps, reward {:.2f} [Process-{}]'
                   ''.format(i, steps, ep_reward, seed))
+            # print(f'mean: {norm_obs.mean}\tvar: {norm_obs.var}')
 
 
 if __name__ == '__main__':
@@ -263,6 +266,7 @@ if __name__ == '__main__':
 
     net = ActorCriticNet(obs_space, action_space).to(device)
     norm_obs = RunningMeanStd(shape=env.observation_space.shape)
+    norm_rew = RunningMeanStd()
 
     jobs = []
     pipes = []
@@ -280,7 +284,7 @@ if __name__ == '__main__':
         pipes.append(parent)
 
     for i in range(N_PROCESS):
-        pipes[i].send((net, norm_obs))
+        pipes[i].send((net, norm_obs, norm_rew))
         jobs[i].start()
 
     while True:
