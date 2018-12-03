@@ -19,12 +19,13 @@ BATCH_SIZE = 32
 LR = 0.00030
 EPOCHS = 3
 CLIP = 0.2
-GAMMA = 0.995
+GAMMA = 0.999
 LAMBDA = 0.98
 ENT_COEF = 0.0
 V_COEF = 1.0
 V_CLIP = True
 OBS_NORM = True
+REW_NORM = True
 LIN_REDUCE = False
 GRAD_NORM = False
 
@@ -206,18 +207,25 @@ def roll_out(env, length, seed, child):
             else:
                 action, value = get_action_and_value(obs, old_net)
 
+            # step
             _obs, reward, done, _ = env.step(action)
-            # print(type(reward))
-            norm_rew.update(np.array([reward]))
-            rew_norm = np.clip(
-                (reward - norm_rew.mean) / np.sqrt(norm_rew.var),
-                -5., 5.)
-            rewards.append(rew_norm)
+
+            # store
             values.append(value)
+
             if OBS_NORM:
                 roll_memory.append([obs_norm, action])
             else:
                 roll_memory.append([obs, action])
+
+            if REW_NORM:
+                norm_rew.update(np.array([reward]))
+                rew_norm = np.clip(
+                    (reward - norm_rew.mean) / np.sqrt(norm_rew.var),
+                    -5., 5.)
+                rewards.append(rew_norm)
+            else:
+                rewards.append(reward)
 
             obs = _obs
             steps += 1
