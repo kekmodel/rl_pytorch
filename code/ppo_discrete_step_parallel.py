@@ -82,6 +82,7 @@ def learn(net, train_memory):
     old_net = deepcopy(net)
     net.train()
     old_net.train()
+
     if LIN_REDUCE:
         LR = LR - (LR * update / total_update)
         CLIP = CLIP - (CLIP * update / total_update)
@@ -132,8 +133,10 @@ def learn(net, train_memory):
 
             optimizer.zero_grad()
             loss.backward()
+
             if GRAD_NORM:
                 nn.utils.clip_grad_norm_(net.parameters(), max_norm=0.5)
+
             optimizer.step()
         writer.add_scalar('data/loss', np.mean(losses), epochs)
     train_memory.clear()
@@ -158,9 +161,11 @@ def compute_adv_with_gae(rewards, values, roll_memory):
     _val = np.array(values[1:], 'float')
     delta = rew + GAMMA * _val - val
     dis_r = np.array(
-        [GAMMA**(i) * r for i, r in enumerate(rewards)], 'float')
-    gae_dt = np.array([(GAMMA * LAMBDA)**(i) * dt for i,
-                       dt in enumerate(delta.tolist())], 'float')
+        [GAMMA**(i) * r for i, r in enumerate(rewards)],
+        'float')
+    gae_dt = np.array(
+        [(GAMMA * LAMBDA)**(i) * dt for i, dt in enumerate(delta.tolist())],
+        'float')
     for i, data in enumerate(roll_memory):
         data.append(sum(dis_r[i:] / GAMMA**(i)))
         data.append(sum(gae_dt[i:] / (GAMMA * LAMBDA)**(i)))
