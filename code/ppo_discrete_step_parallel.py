@@ -27,7 +27,7 @@ V_COEF = 0.5
 V_CLIP = True
 OBS_NORM = True
 REW_NORM = True
-GRAD_NORM = True
+GRAD_NORM = False
 LIN_REDUCE = False
 
 # set device
@@ -104,7 +104,8 @@ def learn(net, train_memory):
             a_batch = a.to(device).long()
             ret_batch = ret.to(device).float()
             adv_batch = adv.to(device).float()
-            adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std()+1e-8)
+            adv_batch = (adv_batch - adv_batch.mean()) / \
+                (adv_batch.std() + 1e-8)
             with torch.no_grad():
                 log_p_batch_old, v_batch_old = old_net(s_batch)
                 log_p_acting_old = log_p_batch_old[range(BATCH_SIZE), a_batch]
@@ -190,9 +191,10 @@ def roll_out(env, length, rank, child):
     roll_memory = []
     rewards = []
     values = []
+    obses, rews = [], []
 
-    # recieve a network
-    old_net = child.recv()
+    # recieve
+    old_net, norm_obs, norm_rew = child.recv()
 
     # Play!
     while True:
@@ -201,10 +203,10 @@ def roll_out(env, length, rank, child):
         ep_reward = 0
         while not done:
             # env.render()
+            obses.append(obs)
             if OBS_NORM:
-                child.send((obs, 'obs', rank))
-                obs_mean, obs_std = child.recv()
-                obs_norm = np.clip((obs - obs_mean) / obs_std, -5, 5)
+                obs_norm = np.clip((obs - norm_obs.mean) /
+                                   np.sqrt(norm_obs.var + 1e-8), -5, 5)
                 action, value = get_action_and_value(obs_norm, old_net)
             else:
                 action, value = get_action_and_value(obs, old_net)
@@ -214,6 +216,7 @@ def roll_out(env, length, rank, child):
 
             # store
             values.append(value)
+            rews.append(reward)
 
             if OBS_NORM:
                 roll_memory.append([obs_norm, action])
@@ -221,9 +224,8 @@ def roll_out(env, length, rank, child):
                 roll_memory.append([obs, action])
 
             if REW_NORM:
-                child.send((np.array([reward]), 'rew', rank))
-                rew_mean, rew_std = child.recv()
-                rew_norm = np.clip((reward - rew_mean) / rew_std, -5, 5)
+                rew_norm = np.clip((reward - norm_rew.mean) /
+                                   np.sqrt(norm_rew.var + 1e-8), -5, 5)
                 rewards.append(rew_norm)
             else:
                 rewards.append(reward)
@@ -234,12 +236,13 @@ def roll_out(env, length, rank, child):
 
             if done or steps % roll_len == 0:
                 if done:
-                    child.send((_obs, '_obs', rank))
+                    obses.append(_obs)
                     _value = 0.
                 else:
                     if OBS_NORM:
                         _obs_norm = np.clip(
-                            (_obs - obs_mean) / obs_std, -5, 5)
+                            (_obs - norm_obs.mean) /
+                            np.sqrt(norm_obs.var + 1e-8), -5, 5)
                         _, _value = get_action_and_value(_obs_norm, old_net)
                     else:
                         _, _value = get_action_and_value(_obs, old_net)
@@ -251,10 +254,15 @@ def roll_out(env, length, rank, child):
                 roll_memory.clear()
 
             if steps % roll_len == 0:
-                child.send(((train_memory, ep_rewards), 'train', rank))
+                child.send(
+                    ((train_memory, ep_rewards, obses, rews), 'train', rank)
+                )
                 train_memory.clear()
                 ep_rewards.clear()
-                old_net.load_state_dict(child.recv())
+                obses.clear()
+                rews.clear()
+                state_dict, norm_obs, norm_rew = child.recv()
+                old_net.load_state_dict(state_dict)
 
         if done:
             episodes += 1
@@ -278,7 +286,6 @@ if __name__ == '__main__':
     jobs = []
     pipes = []
     trajectory = []
-    wait = []
     rewards = deque(maxlen=n_eval)
     epochs = 0
     update = 0
@@ -292,33 +299,16 @@ if __name__ == '__main__':
         pipes.append(parent)
 
     for i in range(N_PROCESS):
-        pipes[i].send(net)
+        pipes[i].send((net, norm_obs, norm_rew))
         jobs[i].start()
 
     while True:
         for i in range(N_PROCESS):
-            if i in wait:
-                continue
-            data, tag, rank = pipes[i].recv()
-            if tag == 'obs':
-                obs = data
-                norm_obs.update(obs)
-                pipes[i].send((norm_obs.mean, np.sqrt(norm_obs.var + 1e-8)))
-
-            elif tag == 'rew':
-                rew = data
-                norm_rew.update(rew)
-                pipes[i].send((norm_rew.mean, np.sqrt(norm_rew.var + 1e-8)))
-
-            elif tag == '_obs':
-                _obs = data
-                norm_obs.update(_obs)
-
-            elif tag == 'train':
-                wait.append(rank)
-                traj, rews = data
+            data, msg, rank = pipes[i].recv()
+            if msg == 'train':
+                traj, ep_rews, obses, rews = data
                 trajectory.extend(traj)
-                rewards.extend(rews)
+                rewards.extend(ep_rews)
 
         if len(rewards) == n_eval:
             writer.add_scalar('data/reward', np.mean(rewards), update)
@@ -336,11 +326,14 @@ if __name__ == '__main__':
                 break
 
         if len(trajectory) == ROLL_LEN * N_PROCESS:
-            wait.clear()
             state_dict = learn(net, trajectory)
+            if OBS_NORM:
+                norm_obs.update(np.array(obses))
+            if REW_NORM:
+                norm_rew.update(np.array(rews))
             update += 1
             print(f'Update: {update}')
             for i in range(N_PROCESS):
-                pipes[i].send(state_dict)
+                pipes[i].send((state_dict, norm_obs, norm_rew))
 
     env.close()
