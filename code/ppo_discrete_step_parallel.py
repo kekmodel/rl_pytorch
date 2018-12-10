@@ -286,6 +286,7 @@ if __name__ == '__main__':
     jobs = []
     pipes = []
     trajectory = []
+    obses, rews = [], []
     rewards = deque(maxlen=n_eval)
     epochs = 0
     update = 0
@@ -306,9 +307,11 @@ if __name__ == '__main__':
         for i in range(N_PROCESS):
             data, msg, rank = pipes[i].recv()
             if msg == 'train':
-                traj, ep_rews, obses, rews = data
+                traj, ep_rews, obs, rew = data
                 trajectory.extend(traj)
                 rewards.extend(ep_rews)
+                obses.extend(obs)
+                rews.extend(rew)
 
         if len(rewards) == n_eval:
             writer.add_scalar('data/reward', np.mean(rewards), update)
@@ -331,6 +334,8 @@ if __name__ == '__main__':
                 norm_obs.update(np.array(obses))
             if REW_NORM:
                 norm_rew.update(np.array(rews))
+            obses.clear()
+            rews.clear()
             update += 1
             print(f'Update: {update}')
             for i in range(N_PROCESS):
