@@ -1,4 +1,5 @@
 
+import pickle
 from collections import deque
 from copy import deepcopy
 
@@ -14,25 +15,25 @@ from tensorboardX import SummaryWriter
 from running_mean_std import RunningMeanStd
 
 N_PROCESS = 8
-ROLL_LEN = 1024
-BATCH_SIZE = 32
+ROLL_LEN = 2048
+BATCH_SIZE = 64 * N_PROCESS
 LR = 0.00030
-EPOCHS = 3
+EPOCHS = 10
 CLIP = 0.2
-GAMMA = 0.999
+GAMMA = 0.995
 LAMBDA = 0.98
 ENT_COEF = 0.0
-V_COEF = 1.0
+V_COEF = 0.5
 V_CLIP = True
 OBS_NORM = True
 REW_NORM = True
+GRAD_NORM = True
 LIN_REDUCE = False
-GRAD_NORM = False
 
 # set device
 use_cuda = torch.cuda.is_available()
 print('cuda:', use_cuda)
-device = torch.device('cuda' if use_cuda else 'cpu')
+device = torch.device('cuda:0' if use_cuda else 'cpu')
 writer = SummaryWriter()
 
 # random seed
@@ -42,8 +43,8 @@ if use_cuda:
 
 # make an environment
 # env = gym.make('CartPole-v0')
-env = gym.make('CartPole-v1')
-# env = gym.make('MountainCar-v0')
+# env = gym.make('CartPole-v1')
+env = gym.make('MountainCar-v0')
 # env = gym.make('LunarLander-v2')
 
 
@@ -102,9 +103,8 @@ def learn(net, train_memory):
             s_batch = s.to(device).float()
             a_batch = a.to(device).long()
             ret_batch = ret.to(device).float()
-            # ret_batch = (ret_batch - ret_batch.mean()) / ret_batch.std()
             adv_batch = adv.to(device).float()
-            adv_batch = (adv_batch - adv_batch.mean()) / adv_batch.std()
+            adv_batch = (adv_batch - adv_batch.mean()) / (adv_batch.std()+1e-8)
             with torch.no_grad():
                 log_p_batch_old, v_batch_old = old_net(s_batch)
                 log_p_acting_old = log_p_batch_old[range(BATCH_SIZE), a_batch]
@@ -120,9 +120,9 @@ def learn(net, train_memory):
                     torch.clamp(v_batch - v_batch_old, -CLIP, CLIP)
                 v_loss1 = (ret_batch - v_clip).pow(2)
                 v_loss2 = (ret_batch - v_batch).pow(2)
-                v_loss = 0.5 * torch.max(v_loss1, v_loss2).mean()
+                v_loss = torch.max(v_loss1, v_loss2).mean()
             else:
-                v_loss = 0.5 * (ret_batch - v_batch).pow(2).mean()
+                v_loss = (ret_batch - v_batch).pow(2).mean()
 
             log_p, _ = net(s_batch)
             entropy = -(log_p.exp() * log_p).sum(dim=1).mean()
@@ -159,15 +159,13 @@ def compute_adv_with_gae(rewards, values, roll_memory):
     rew = np.array(rewards, 'float')
     val = np.array(values[:-1], 'float')
     _val = np.array(values[1:], 'float')
-    delta = rew + GAMMA * _val - val
-    dis_r = np.array(
-        [GAMMA**(i) * r for i, r in enumerate(rewards)],
-        'float')
+    ret = rew + GAMMA * _val
+    delta = ret - val
     gae_dt = np.array(
         [(GAMMA * LAMBDA)**(i) * dt for i, dt in enumerate(delta.tolist())],
         'float')
     for i, data in enumerate(roll_memory):
-        data.append(sum(dis_r[i:] / GAMMA**(i)))
+        data.append(ret[i])
         data.append(sum(gae_dt[i:] / (GAMMA * LAMBDA)**(i)))
 
     rewards.clear()
@@ -176,14 +174,14 @@ def compute_adv_with_gae(rewards, values, roll_memory):
     return roll_memory
 
 
-def roll_out(env, length, seed, child):
-    env.seed(seed)
+def roll_out(env, length, rank, child):
+    env.seed(rank)
 
     # hyperparameter
-    n_episodes = 100000
     roll_len = length
 
     # for play
+    episodes = 0
     steps = 0
     ep_rewards = []
 
@@ -193,21 +191,20 @@ def roll_out(env, length, seed, child):
     rewards = []
     values = []
 
-    # recieve
-    old_net, norm_obs, norm_rew = child.recv()
+    # recieve a network
+    old_net = child.recv()
 
     # Play!
-    for i in range(1, n_episodes + 1):
+    while True:
         obs = env.reset()
         done = False
         ep_reward = 0
         while not done:
             # env.render()
             if OBS_NORM:
-                norm_obs.update(obs)
-                obs_norm = np.clip(
-                    (obs - norm_obs.mean) / np.sqrt(norm_obs.var),
-                    -5., 5.)
+                child.send((obs, 'obs', rank))
+                obs_mean, obs_std = child.recv()
+                obs_norm = np.clip((obs - obs_mean) / obs_std, -5, 5)
                 action, value = get_action_and_value(obs_norm, old_net)
             else:
                 action, value = get_action_and_value(obs, old_net)
@@ -224,10 +221,9 @@ def roll_out(env, length, seed, child):
                 roll_memory.append([obs, action])
 
             if REW_NORM:
-                norm_rew.update(np.array([reward]))
-                rew_norm = np.clip(
-                    (reward - norm_rew.mean) / np.sqrt(norm_rew.var),
-                    -5., 5.)
+                child.send((np.array([reward]), 'rew', rank))
+                rew_mean, rew_std = child.recv()
+                rew_norm = np.clip((reward - rew_mean) / rew_std, -5, 5)
                 rewards.append(rew_norm)
             else:
                 rewards.append(reward)
@@ -238,39 +234,37 @@ def roll_out(env, length, seed, child):
 
             if done or steps % roll_len == 0:
                 if done:
-                    norm_obs.update(_obs)
+                    child.send((_obs, '_obs', rank))
                     _value = 0.
                 else:
                     if OBS_NORM:
                         _obs_norm = np.clip(
-                            (_obs - norm_obs.mean) /
-                            np.sqrt(norm_obs.var),
-                            -5., 5.)
+                            (_obs - obs_mean) / obs_std, -5, 5)
                         _, _value = get_action_and_value(_obs_norm, old_net)
                     else:
                         _, _value = get_action_and_value(_obs, old_net)
 
                 values.append(_value)
-                train_memory.extend(compute_adv_with_gae(
-                    rewards, values, roll_memory))
+                train_memory.extend(
+                    compute_adv_with_gae(rewards, values, roll_memory)
+                )
                 roll_memory.clear()
 
             if steps % roll_len == 0:
-                child.send((train_memory, ep_rewards))
+                child.send(((train_memory, ep_rewards), 'train', rank))
                 train_memory.clear()
                 ep_rewards.clear()
                 old_net.load_state_dict(child.recv())
 
         if done:
+            episodes += 1
             ep_rewards.append(ep_reward)
             print('{:3} Episode in {:5} steps, reward {:.2f} [Process-{}]'
-                  ''.format(i, steps, ep_reward, seed))
-            # print(f'mean: {norm_obs.mean}\tvar: {norm_obs.var}')
+                  ''.format(episodes, steps, ep_reward, rank))
 
 
 if __name__ == '__main__':
     mp.set_start_method('spawn')
-
     obs_space = env.observation_space.shape[0]
     action_space = env.action_space.n
     n_eval = env.spec.trials
@@ -284,6 +278,7 @@ if __name__ == '__main__':
     jobs = []
     pipes = []
     trajectory = []
+    wait = []
     rewards = deque(maxlen=n_eval)
     epochs = 0
     update = 0
@@ -297,14 +292,33 @@ if __name__ == '__main__':
         pipes.append(parent)
 
     for i in range(N_PROCESS):
-        pipes[i].send((net, norm_obs, norm_rew))
+        pipes[i].send(net)
         jobs[i].start()
 
     while True:
         for i in range(N_PROCESS):
-            traj, rew = pipes[i].recv()
-            trajectory.extend(traj)
-            rewards.extend(rew)
+            if i in wait:
+                continue
+            data, tag, rank = pipes[i].recv()
+            if tag == 'obs':
+                obs = data
+                norm_obs.update(obs)
+                pipes[i].send((norm_obs.mean, np.sqrt(norm_obs.var + 1e-8)))
+
+            elif tag == 'rew':
+                rew = data
+                norm_rew.update(rew)
+                pipes[i].send((norm_rew.mean, np.sqrt(norm_rew.var + 1e-8)))
+
+            elif tag == '_obs':
+                _obs = data
+                norm_obs.update(_obs)
+
+            elif tag == 'train':
+                wait.append(rank)
+                traj, rews = data
+                trajectory.extend(traj)
+                rewards.extend(rews)
 
         if len(rewards) == n_eval:
             writer.add_scalar('data/reward', np.mean(rewards), update)
@@ -314,13 +328,19 @@ if __name__ == '__main__':
                 torch.save(net.state_dict(),
                            f'./test/saved_models/'
                            f'{env.spec.id}_up{update}_clear_model_ppo_st.pt')
+                with open(f'./test/saved_models/'
+                          f'{env.spec.id}_up{update}_clear_norm_obs.pkl',
+                          'wb') as f:
+                    pickle.dump(norm_obs, f,
+                                pickle.HIGHEST_PROTOCOL)
                 break
 
-        state_dict = learn(net, trajectory)
-        update += 1
-        print(f'Update: {update}')
-
-        for i in range(N_PROCESS):
-            pipes[i].send(state_dict)
+        if len(trajectory) == ROLL_LEN * N_PROCESS:
+            wait.clear()
+            state_dict = learn(net, trajectory)
+            update += 1
+            print(f'Update: {update}')
+            for i in range(N_PROCESS):
+                pipes[i].send(state_dict)
 
     env.close()
