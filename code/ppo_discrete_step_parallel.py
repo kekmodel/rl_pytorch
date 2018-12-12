@@ -15,13 +15,13 @@ from tensorboardX import SummaryWriter
 from running_mean_std import RunningMeanStd
 
 N_PROCESS = 8
-ROLL_LEN = 2048
+ROLL_LEN = 4096
 BATCH_SIZE = 64 * N_PROCESS
 LR = 0.00030
 EPOCHS = 10
 CLIP = 0.2
-GAMMA = 0.995
-LAMBDA = 0.98
+GAMMA = 0.99
+LAMBDA = 0.95
 ENT_COEF = 0.0
 V_COEF = 0.5
 V_CLIP = True
@@ -57,12 +57,10 @@ class ActorCriticNet(nn.Module):
             nn.Tanh()
         )
         self.pol = nn.Sequential(
-            nn.Linear(h, h),
             nn.Tanh(),
             nn.Linear(h, action_space)
         )
         self.val = nn.Sequential(
-            nn.Linear(h, h),
             nn.Tanh(),
             nn.Linear(h, 1)
         )
@@ -104,8 +102,7 @@ def learn(net, train_memory):
             a_batch = a.to(device).long()
             ret_batch = ret.to(device).float()
             adv_batch = adv.to(device).float()
-            adv_batch = (adv_batch - adv_batch.mean()) / \
-                (adv_batch.std() + 1e-8)
+            adv_batch = (adv_batch - adv_batch.mean()) / adv_batch.std()
             with torch.no_grad():
                 log_p_batch_old, v_batch_old = old_net(s_batch)
                 log_p_acting_old = log_p_batch_old[range(BATCH_SIZE), a_batch]
@@ -206,7 +203,7 @@ def roll_out(env, length, rank, child):
             obses.append(obs)
             if OBS_NORM:
                 obs_norm = np.clip((obs - norm_obs.mean) /
-                                   np.sqrt(norm_obs.var + 1e-8), -5, 5)
+                                   np.sqrt(norm_obs.var), -10, 10)
                 action, value = get_action_and_value(obs_norm, old_net)
             else:
                 action, value = get_action_and_value(obs, old_net)
@@ -225,7 +222,7 @@ def roll_out(env, length, rank, child):
 
             if REW_NORM:
                 rew_norm = np.clip((reward - norm_rew.mean) /
-                                   np.sqrt(norm_rew.var + 1e-8), -5, 5)
+                                   np.sqrt(norm_rew.var), -10, 10)
                 rewards.append(rew_norm)
             else:
                 rewards.append(reward)
@@ -242,7 +239,7 @@ def roll_out(env, length, rank, child):
                     if OBS_NORM:
                         _obs_norm = np.clip(
                             (_obs - norm_obs.mean) /
-                            np.sqrt(norm_obs.var + 1e-8), -5, 5)
+                            np.sqrt(norm_obs.var), -10, 10)
                         _, _value = get_action_and_value(_obs_norm, old_net)
                     else:
                         _, _value = get_action_and_value(_obs, old_net)
