@@ -8,12 +8,10 @@
 import random
 import numpy as np
 import torch
-from torch.optim import Adam, AdamW
+from torch.optim import AdamW
 import gym
-import time
 import core
 import matplotlib.pyplot as plt
-from IPython.display import clear_output
 from running_mean_std import RunningMeanStd
 
 
@@ -42,7 +40,6 @@ class PPOBuffer(object):
         path_slice = slice(self.path_start_idx, self.ptr)
         rews = np.append(self.rew_buf[path_slice], last_val)
         vals = np.append(self.val_buf[path_slice], last_val)
-        
         deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
         self.adv_buf[path_slice] = core.discount_cumsum(deltas, self.gamma * self.lam)
         self.ret_buf[path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
@@ -63,7 +60,6 @@ class PPOBuffer(object):
 
 
 def plot(ep_ret_buf, eval_ret_buf, loss_buf):
-    clear_output(True)
     plt.figure(figsize=(16, 5))
     plt.subplot(131)
     plt.plot(ep_ret_buf, alpha=0.5)
@@ -101,6 +97,7 @@ def compute_loss_pi(data, ac, clip_ratio):
 
     return loss_pi, pi_info
 
+
 def compute_loss_v(data, ac):
     obs, ret = data['obs'], data['ret']
     return ((ac.v(obs) - ret)**2).mean()
@@ -134,7 +131,7 @@ def update(buf, train_pi_iters, train_vf_iters, clip_ratio, target_kl, ac, pi_op
 
 
 def main():
-    actor_critic=core.MLPActorCritic
+    actor_critic = core.MLPActorCritic
     hidden_size = 64
     activation = torch.nn.Tanh
     seed = 5
@@ -172,20 +169,16 @@ def main():
 
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space, (hidden_size, hidden_size), activation)
-    
+
     # Set up optimizers for policy and value function
     pi_optimizer = AdamW(ac.pi.parameters(), lr=pi_lr, eps=1e-6)
     vf_optimizer = AdamW(ac.v.parameters(), lr=vf_lr, eps=1e-6)
 
-    # Count variables
-    var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
-
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch)
     buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
-    
+
     # Prepare for interaction with environment
-    start_time = time.time()
     o, ep_ret, ep_len = env.reset(), 0, 0
     ep_num = 0
     ep_ret_buf, eval_ret_buf = [], []
@@ -216,7 +209,7 @@ def main():
 
             timeout = ep_len == max_ep_len
             terminal = d or timeout
-            epoch_ended = t==local_steps_per_epoch-1
+            epoch_ended = t == local_steps_per_epoch-1
 
             if terminal or epoch_ended:
                 if timeout or epoch_ended:
@@ -238,7 +231,7 @@ def main():
                     if view_curve:
                         plot(ep_ret_buf, eval_ret_buf, loss_buf)
                     else:
-                        print(f'Episode: {ep_num:3} Reward: {ep_reward:3}')
+                        print(f'Episode: {ep_num:3} Reward: {ep_num:3}')
                     if eval_ret_buf[-1] >= env.spec.reward_threshold:
                         print(f"\n{env.spec.id} is sloved! {ep_num} Episode")
                         return
