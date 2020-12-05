@@ -190,6 +190,7 @@ def main():
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
+            env.render()
             if obs_norm:
                 obs_normalizer.update(np.array([o]))
                 o_norm = np.clip((o - obs_normalizer.mean) / np.sqrt(obs_normalizer.var), -10, 10)
@@ -234,7 +235,7 @@ def main():
                     if view_curve:
                         plot(ep_ret_buf, eval_ret_buf, loss_buf)
                     else:
-                        print(f'Episode: {ep_num:3} Reward: {ep_reward:3}')
+                        print(f'Episode: {ep_num:3} Reward: {ep_ret:3}')
                     if eval_ret_buf[-1] >= env.spec.reward_threshold:
                         print(f"\n{env.spec.id} is sloved! {ep_num} Episode")
                         return
