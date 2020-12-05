@@ -1,10 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 # %%
-
-# %%
-
-
 import random
 import numpy as np
 import torch
@@ -59,8 +55,6 @@ class PPOBuffer(object):
         return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
 
 
-# %%
-
 
 def plot(ep_ret_buf, eval_ret_buf, loss_buf):
     clear_output(True)
@@ -72,33 +66,27 @@ def plot(ep_ret_buf, eval_ret_buf, loss_buf):
     plt.title(f"Reward: {eval_ret_buf[-1]:.0f}")
     plt.subplot(132)
     plt.plot(loss_buf['pi'], alpha=0.5)
-    plt.title(f"Pi_Loss: {np.mean(loss_buf['pi'][:-20:]):.3f}")
+    plt.title(f"Pi_Loss: {np.mean(loss_buf['pi'][:-10:]):.3f}")
     plt.subplot(133)
     plt.plot(loss_buf['vf'], alpha=0.5)
-    plt.title(f"Vf_Loss: {np.mean(loss_buf['vf'][-20:]):.2f}")
+    plt.title(f"Vf_Loss: {np.mean(loss_buf['vf'][-10:]):.2f}")
     plt.show()
 
 
-# %%
 
-
-def compute_loss_pi(data, ac, clip_ratio):
+def compute_loss_pi(data, ac, beta):
     obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
 
     # Policy loss
     pi, logp = ac.pi(obs, act)
     ratio = torch.exp(logp - logp_old)
-    clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
-    loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
+    kl_div = logp.exp() * (logp - logp_old)
+    loss_pi = -(ratio * adv - beta * kl_div).mean()
 
     # Useful extra info
-#     approx_kl = (logp_old - logp).mean().item()
-    kl_div = ((logp.exp() * (logp - logp_old)).mean()).detach().item()
+    kl = ((logp.exp() * (logp - logp_old)).mean()).detach().item()
     ent = pi.entropy().mean().detach().item()
-    clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
-    clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().detach().item()
-    pi_info = dict(kl=kl_div, ent=ent, cf=clipfrac)
-
+    pi_info = dict(kl=kl, ent=ent)
     return loss_pi, pi_info
 
 def compute_loss_v(data, ac):
@@ -106,18 +94,14 @@ def compute_loss_v(data, ac):
     return ((ac.v(obs) - ret)**2).mean()
 
 
-def update(buf, train_pi_iters, train_vf_iters, clip_ratio, target_kl, ac, pi_optimizer, vf_optimizer, loss_buf):
+def update(buf, train_pi_iters, train_vf_iters, beta, target_kl, ac, pi_optimizer, vf_optimizer, loss_buf):
     data = buf.get()
 
     # Train policy with multiple steps of gradient descent
     for i in range(train_pi_iters):
         pi_optimizer.zero_grad()
-        loss_pi, pi_info = compute_loss_pi(data, ac, clip_ratio)
+        loss_pi, pi_info = compute_loss_pi(data, ac, beta)
         loss_buf['pi'].append(loss_pi.item())
-        kl = pi_info['kl']
-        if kl > 1.5 * target_kl:
-            print('Early stopping at step %d due to reaching max kl.'%i)
-            break
         loss_pi.backward()
         pi_optimizer.step()
 
@@ -130,11 +114,9 @@ def update(buf, train_pi_iters, train_vf_iters, clip_ratio, target_kl, ac, pi_op
         vf_optimizer.step()
 
 
-# %%
-
 
 def main():
-    actor_critic=core.MLPActorCritic
+    actor_critic = core.MLPActorCritic
     hidden_size = 64
     activation = torch.nn.Tanh
     seed = 5
@@ -142,7 +124,7 @@ def main():
     epochs = 1000
     gamma = 0.99
     lam = 0.97
-    clip_ratio = 0.2
+    beta = 3.0
     pi_lr = 3e-4
     vf_lr = 1e-3
     train_pi_iters = 80
@@ -194,6 +176,7 @@ def main():
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
+            env.render()
             if obs_norm:
                 obs_normalizer.update(np.array([o]))
                 o_norm = np.clip((o - obs_normalizer.mean) / np.sqrt(obs_normalizer.var), -10, 10)
@@ -233,23 +216,23 @@ def main():
                 buf.finish_path(v)
                 if terminal:
                     ep_ret_buf.append(ep_ret)
-                    eval_ret_buf.append(np.mean(ep_ret_buf[-20:]))
+                    eval_ret_buf.append(np.mean(ep_ret_buf[-100:]))
                     ep_num += 1
                     if view_curve:
                         plot(ep_ret_buf, eval_ret_buf, loss_buf)
                     else:
-                        print(f'Episode: {ep_num:3} Reward: {ep_reward:3}')
+                        print(f'Episode: {ep_num:3} Reward: {ep_ret:3}')
                     if eval_ret_buf[-1] >= env.spec.reward_threshold:
                         print(f"\n{env.spec.id} is sloved! {ep_num} Episode")
                         return
 
                 o, ep_ret, ep_len = env.reset(), 0, 0
         # Perform PPO update!
-        update(buf, train_pi_iters, train_vf_iters, clip_ratio, target_kl, ac, pi_optimizer, vf_optimizer, loss_buf)
+        update(buf, train_pi_iters, train_vf_iters, beta, target_kl, ac, pi_optimizer, vf_optimizer, loss_buf)
+
+
+if __name__ == '__main__':
+    main()
 
 
 # %%
-
-
-main()
-
