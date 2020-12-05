@@ -4,7 +4,7 @@
 
 # %%
 
-
+import pickle
 import random
 import numpy as np
 import torch
@@ -235,6 +235,9 @@ def main():
                         print(f'Episode: {ep_num:3}\tReward: {ep_ret:3}')
                     if eval_ret_buf[-1] >= env.spec.reward_threshold:
                         print(f"\n{env.spec.id} is sloved! {ep_num} Episode")
+                        torch.save(ac.state_dict(), f'./test/saved_models/{env.spec.id}_ep{ep_num}_clear_model_ppo.pt')
+                        with open(f'./test/saved_models/{env.spec.id}_ep{ep_num}_clear_norm_obs.pkl', 'wb') as f:
+                            pickle.dump(obs_normalizer, f, pickle.HIGHEST_PROTOCOL)
                         return
 
                 o, ep_ret, ep_len = env.reset(), 0, 0
