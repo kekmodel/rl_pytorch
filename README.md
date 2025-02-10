@@ -7,8 +7,8 @@
 - Categotical Dueling Double DQN
 - Proximal Policy Optimization (PPO)
 	+ discrete (episodic, n-step)
-- Soft Actor-Critic (SAC)
-	+ debugging
+- Group Relative Policy Optimization (GRPO)
+
 <br>
 
 ### Exploration
@@ -41,16 +41,5 @@ The result of passing the environment-defined "solving" criteria.
 <br>
 
 ### TODO
-- Quantile Regression DQN (QR DQN)
-- Implicit Quantile Networks (IQN)
-- Intrinsic Curiosity Module (ICM)
-- Rainbow
-- Parametric DQN
 - Proximal Policy Optimization (PPO)
 	+ continuous
-- Deep Deterministic Policy Gradient (DDPG)
-- MCTS Net
-- Parallel Models 
-	+ Ape-X
-	+ R2D2
-	+ PAAC
