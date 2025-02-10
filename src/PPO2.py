@@ -2,15 +2,16 @@
 # coding: utf-8
 # %%
 import random
+import time
+
+import core
+import gym
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch.optim import Adam, AdamW
-import gym
-import time
-import core
-import matplotlib.pyplot as plt
 from IPython.display import clear_output
 from running_mean_std import RunningMeanStd
+from torch.optim import Adam, AdamW
 
 
 class PPOBuffer(object):
@@ -38,7 +39,7 @@ class PPOBuffer(object):
         path_slice = slice(self.path_start_idx, self.ptr)
         rews = np.append(self.rew_buf[path_slice], last_val)
         vals = np.append(self.val_buf[path_slice], last_val)
-        
+
         deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
         self.adv_buf[path_slice] = core.discount_cumsum(deltas, self.gamma * self.lam)
         self.ret_buf[path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
@@ -50,10 +51,8 @@ class PPOBuffer(object):
         adv_mean = np.mean(self.adv_buf)
         adv_std = np.std(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-                    adv=self.adv_buf, logp=self.logp_buf)
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
-
+        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf, adv=self.adv_buf, logp=self.logp_buf)
+        return {k: torch.as_tensor(v, dtype=torch.float32) for k, v in data.items()}
 
 
 def plot(ep_ret_buf, eval_ret_buf, loss_buf):
@@ -65,17 +64,16 @@ def plot(ep_ret_buf, eval_ret_buf, loss_buf):
     plt.plot(eval_ret_buf)
     plt.title(f"Reward: {eval_ret_buf[-1]:.0f}")
     plt.subplot(132)
-    plt.plot(loss_buf['pi'], alpha=0.5)
+    plt.plot(loss_buf["pi"], alpha=0.5)
     plt.title(f"Pi_Loss: {np.mean(loss_buf['pi'][:-10:]):.3f}")
     plt.subplot(133)
-    plt.plot(loss_buf['vf'], alpha=0.5)
+    plt.plot(loss_buf["vf"], alpha=0.5)
     plt.title(f"Vf_Loss: {np.mean(loss_buf['vf'][-10:]):.2f}")
     plt.show()
 
 
-
 def compute_loss_pi(data, ac, beta):
-    obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
+    obs, act, adv, logp_old = data["obs"], data["act"], data["adv"], data["logp"]
 
     # Policy loss
     pi, logp = ac.pi(obs, act)
@@ -89,9 +87,10 @@ def compute_loss_pi(data, ac, beta):
     pi_info = dict(kl=kl, ent=ent)
     return loss_pi, pi_info
 
+
 def compute_loss_v(data, ac):
-    obs, ret = data['obs'], data['ret']
-    return ((ac.v(obs) - ret)**2).mean()
+    obs, ret = data["obs"], data["ret"]
+    return ((ac.v(obs) - ret) ** 2).mean()
 
 
 def update(buf, train_pi_iters, train_vf_iters, beta, target_kl, ac, pi_optimizer, vf_optimizer, loss_buf):
@@ -101,7 +100,7 @@ def update(buf, train_pi_iters, train_vf_iters, beta, target_kl, ac, pi_optimize
     for i in range(train_pi_iters):
         pi_optimizer.zero_grad()
         loss_pi, pi_info = compute_loss_pi(data, ac, beta)
-        loss_buf['pi'].append(loss_pi.item())
+        loss_buf["pi"].append(loss_pi.item())
         loss_pi.backward()
         pi_optimizer.step()
 
@@ -109,10 +108,9 @@ def update(buf, train_pi_iters, train_vf_iters, beta, target_kl, ac, pi_optimize
     for i in range(train_vf_iters):
         vf_optimizer.zero_grad()
         loss_vf = compute_loss_v(data, ac)
-        loss_buf['vf'].append(loss_vf.item())
+        loss_buf["vf"].append(loss_vf.item())
         loss_vf.backward()
         vf_optimizer.step()
-
 
 
 def main():
@@ -136,11 +134,11 @@ def main():
     view_curve = False
 
     # make an environment
-#     env = gym.make('CartPole-v0')
-#     env = gym.make('CartPole-v1')
-#     env = gym.make('MountainCar-v0')
-#     env = gym.make('LunarLander-v2')
-    env = gym.make('BipedalWalker-v3')
+    #     env = gym.make('CartPole-v0')
+    #     env = gym.make('CartPole-v1')
+    #     env = gym.make('MountainCar-v0')
+    #     env = gym.make('LunarLander-v2')
+    env = gym.make("BipedalWalker-v3")
     print(f"reward_threshold: {env.spec.reward_threshold}")
 
     obs_dim = env.observation_space.shape
@@ -154,7 +152,7 @@ def main():
 
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space, (hidden_size, hidden_size), activation)
-    
+
     # Set up optimizers for policy and value function
     pi_optimizer = AdamW(ac.pi.parameters(), lr=pi_lr, eps=1e-6)
     vf_optimizer = AdamW(ac.v.parameters(), lr=vf_lr, eps=1e-6)
@@ -165,13 +163,13 @@ def main():
     # Set up experience buffer
     local_steps_per_epoch = int(steps_per_epoch)
     buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
-    
+
     # Prepare for interaction with environment
     start_time = time.time()
     o, ep_ret, ep_len = env.reset(), 0, 0
     ep_num = 0
     ep_ret_buf, eval_ret_buf = [], []
-    loss_buf = {'pi': [], 'vf': []}
+    loss_buf = {"pi": [], "vf": []}
     obs_normalizer = RunningMeanStd(shape=env.observation_space.shape)
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -199,7 +197,7 @@ def main():
 
             timeout = ep_len == max_ep_len
             terminal = d or timeout
-            epoch_ended = t==local_steps_per_epoch-1
+            epoch_ended = t == local_steps_per_epoch - 1
 
             if terminal or epoch_ended:
                 if timeout or epoch_ended:
@@ -221,7 +219,7 @@ def main():
                     if view_curve:
                         plot(ep_ret_buf, eval_ret_buf, loss_buf)
                     else:
-                        print(f'Episode: {ep_num:3} Reward: {ep_ret:3}')
+                        print(f"Episode: {ep_num:3} Reward: {ep_ret:3}")
                     if eval_ret_buf[-1] >= env.spec.reward_threshold:
                         print(f"\n{env.spec.id} is sloved! {ep_num} Episode")
                         return
@@ -231,8 +229,9 @@ def main():
         update(buf, train_pi_iters, train_vf_iters, beta, target_kl, ac, pi_optimizer, vf_optimizer, loss_buf)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 
 
+# %%
 # %%

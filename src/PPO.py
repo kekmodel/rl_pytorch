@@ -6,13 +6,14 @@
 
 import pickle
 import random
+
+import core
+import gym
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch.optim import AdamW
-import gym
-import core
-import matplotlib.pyplot as plt
 from running_mean_std import RunningMeanStd
+from torch.optim import AdamW
 
 
 class PPOBuffer(object):
@@ -51,9 +52,8 @@ class PPOBuffer(object):
         adv_mean = np.mean(self.adv_buf)
         adv_std = np.std(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-                    adv=self.adv_buf, logp=self.logp_buf)
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
+        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf, adv=self.adv_buf, logp=self.logp_buf)
+        return {k: torch.as_tensor(v, dtype=torch.float32) for k, v in data.items()}
 
 
 # %%
@@ -67,10 +67,10 @@ def plot(ep_ret_buf, eval_ret_buf, loss_buf):
     plt.plot(eval_ret_buf)
     plt.title(f"Reward: {eval_ret_buf[-1]:.0f}")
     plt.subplot(132)
-    plt.plot(loss_buf['pi'], alpha=0.5)
+    plt.plot(loss_buf["pi"], alpha=0.5)
     plt.title(f"Pi_Loss: {np.mean(loss_buf['pi'][:-20:]):.3f}")
     plt.subplot(133)
-    plt.plot(loss_buf['vf'], alpha=0.5)
+    plt.plot(loss_buf["vf"], alpha=0.5)
     plt.title(f"Vf_Loss: {np.mean(loss_buf['vf'][-20:]):.2f}")
     plt.show()
 
@@ -79,19 +79,19 @@ def plot(ep_ret_buf, eval_ret_buf, loss_buf):
 
 
 def compute_loss_pi(data, ac, clip_ratio):
-    obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
+    obs, act, adv, logp_old = data["obs"], data["act"], data["adv"], data["logp"]
 
     # Policy loss
     pi, logp = ac.pi(obs, act)
     ratio = torch.exp(logp - logp_old)
-    clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
+    clip_adv = torch.clamp(ratio, 1 - clip_ratio, 1 + clip_ratio) * adv
     loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
 
     # Useful extra info
-#     approx_kl = (logp_old - logp).mean().item()
+    #     approx_kl = (logp_old - logp).mean().item()
     kl_div = ((logp.exp() * (logp - logp_old)).mean()).detach().item()
     ent = pi.entropy().mean().detach().item()
-    clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
+    clipped = ratio.gt(1 + clip_ratio) | ratio.lt(1 - clip_ratio)
     clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().detach().item()
     pi_info = dict(kl=kl_div, ent=ent, cf=clipfrac)
 
@@ -99,8 +99,8 @@ def compute_loss_pi(data, ac, clip_ratio):
 
 
 def compute_loss_v(data, ac):
-    obs, ret = data['obs'], data['ret']
-    return ((ac.v(obs) - ret)**2).mean()
+    obs, ret = data["obs"], data["ret"]
+    return ((ac.v(obs) - ret) ** 2).mean()
 
 
 def update(buf, train_pi_iters, train_vf_iters, clip_ratio, target_kl, ac, pi_optimizer, vf_optimizer, loss_buf):
@@ -110,10 +110,10 @@ def update(buf, train_pi_iters, train_vf_iters, clip_ratio, target_kl, ac, pi_op
     for i in range(train_pi_iters):
         pi_optimizer.zero_grad()
         loss_pi, pi_info = compute_loss_pi(data, ac, clip_ratio)
-        loss_buf['pi'].append(loss_pi.item())
-        kl = pi_info['kl']
+        loss_buf["pi"].append(loss_pi.item())
+        kl = pi_info["kl"]
         if kl > 1.5 * target_kl:
-            print('Early stopping at step %d due to reaching max kl.'%i)
+            print("Early stopping at step %d due to reaching max kl." % i)
             break
         loss_pi.backward()
         pi_optimizer.step()
@@ -122,7 +122,7 @@ def update(buf, train_pi_iters, train_vf_iters, clip_ratio, target_kl, ac, pi_op
     for i in range(train_vf_iters):
         vf_optimizer.zero_grad()
         loss_vf = compute_loss_v(data, ac)
-        loss_buf['vf'].append(loss_vf.item())
+        loss_buf["vf"].append(loss_vf.item())
         loss_vf.backward()
         vf_optimizer.step()
 
@@ -151,11 +151,11 @@ def main():
     view_curve = False
 
     # make an environment
-#     env = gym.make('CartPole-v0')
-#     env = gym.make('CartPole-v1')
-#     env = gym.make('MountainCar-v0')
-#     env = gym.make('LunarLander-v2')
-    env = gym.make('BipedalWalker-v3')
+    #     env = gym.make('CartPole-v0')
+    #     env = gym.make('CartPole-v1')
+    #     env = gym.make('MountainCar-v0')
+    #     env = gym.make('LunarLander-v2')
+    env = gym.make("BipedalWalker-v3")
     print(f"reward_threshold: {env.spec.reward_threshold}")
 
     obs_dim = env.observation_space.shape
@@ -182,7 +182,7 @@ def main():
     o, ep_ret, ep_len = env.reset(), 0, 0
     ep_num = 0
     ep_ret_buf, eval_ret_buf = [], []
-    loss_buf = {'pi': [], 'vf': []}
+    loss_buf = {"pi": [], "vf": []}
     obs_normalizer = RunningMeanStd(shape=env.observation_space.shape)
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -210,7 +210,7 @@ def main():
 
             timeout = ep_len == max_ep_len
             terminal = d or timeout
-            epoch_ended = t == local_steps_per_epoch-1
+            epoch_ended = t == local_steps_per_epoch - 1
 
             if terminal or epoch_ended:
                 if timeout or epoch_ended:
@@ -232,11 +232,11 @@ def main():
                     if view_curve:
                         plot(ep_ret_buf, eval_ret_buf, loss_buf)
                     else:
-                        print(f'Episode: {ep_num:3}\tReward: {ep_ret:3}')
+                        print(f"Episode: {ep_num:3}\tReward: {ep_ret:3}")
                     if eval_ret_buf[-1] >= env.spec.reward_threshold:
                         print(f"\n{env.spec.id} is sloved! {ep_num} Episode")
-                        torch.save(ac.state_dict(), f'./test/saved_models/{env.spec.id}_ep{ep_num}_clear_model_ppo.pt')
-                        with open(f'./test/saved_models/{env.spec.id}_ep{ep_num}_clear_norm_obs.pkl', 'wb') as f:
+                        torch.save(ac.state_dict(), f"./test/saved_models/{env.spec.id}_ep{ep_num}_clear_model_ppo.pt")
+                        with open(f"./test/saved_models/{env.spec.id}_ep{ep_num}_clear_norm_obs.pkl", "wb") as f:
                             pickle.dump(obs_normalizer, f, pickle.HIGHEST_PROTOCOL)
                         return
 
@@ -249,4 +249,3 @@ def main():
 
 
 main()
-
